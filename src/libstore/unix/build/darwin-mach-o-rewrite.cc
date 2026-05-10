@@ -425,6 +425,14 @@ size_t fixupFile(const std::filesystem::path & path)
     if (!modified)
         return 0;
 
+    /* `registerOutputs` canonicalises perms to `0444` before this helper
+       runs (so it can spot tampering by the builder), so the in-place
+       `writeFile` below would fail with `EACCES`. Add the owner-write bit
+       back; the trailing `canonicalisePathMetaData` call resets perms to
+       the canonical `0444`. */
+    std::filesystem::permissions(
+        path, std::filesystem::perms::owner_write, std::filesystem::perm_options::add);
+
     /* `canonicalisePathMetaData` runs next and resets perms, so 0600
        here is a safe transient. */
     writeFile(path, std::string_view{data}, 0600);

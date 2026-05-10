@@ -48,6 +48,39 @@ mkDerivation {
     /usr/bin/cc -O0 -DDOC_PATH="\"$docPlaceholder\"" -o hello-codesigned main.c
     /usr/bin/codesign -f -s - hello-codesigned
 
+    # Post-link byte-modification variant: linker-sign a binary with
+    # an embedded marker, then flip a byte in `__TEXT,__cstring` to
+    # leave a stale page hash. This mirrors cctools-port's
+    # `install_name_tool` rewriting `LC_LOAD_DYLIB` without re-signing,
+    # `makeBinaryWrapper` patching wrappers, and Bun-style SEA
+    # packagers appending bytes — none of which re-sign. Apple's
+    # `/usr/bin/install_name_tool` re-signs silently on macOS 14+, so
+    # invoking it directly does not reproduce the trigger across host
+    # versions; the byte-flip is host-agnostic. `outputRewrites` is
+    # empty for this fixture's IA cold build, so the test only passes
+    # if the helper runs unconditionally rather than only when
+    # `RewritingSink` fires.
+    cat > main-postlink.c <<'EOF'
+    #include <stdio.h>
+    int main(void) {
+        puts("MACHO_REWRITE_POSTLINK_MARKER_PFRMTKQNVH");
+        return 0;
+    }
+    EOF
+    /usr/bin/cc -O0 -Wl,-adhoc_codesign -o hello-postlink-modify main-postlink.c
+    /usr/bin/python3 - hello-postlink-modify <<'PY'
+    import sys
+    path = sys.argv[1]
+    with open(path, "r+b") as f:
+        data = f.read()
+        marker = b"MACHO_REWRITE_POSTLINK_MARKER_PFRMTKQNVH"
+        idx = data.index(marker)
+        # Replace the leading 'M' with 'N'. Single-byte change inside
+        # `__TEXT,__cstring`; preserves length and executability.
+        f.seek(idx)
+        f.write(b"N")
+    PY
+
     # `-Wl,-adhoc_codesign` forces `ld` to ad-hoc-sign the cross-arch
     # slice too — Apple's linker only signs the native arch by default,
     # which would leave the other slice unsigned and fail verify.
@@ -174,6 +207,7 @@ mkDerivation {
     cp hello-fat32-1arch "$out/bin/hello-fat32-1arch"
     cp hello-fat32-multi "$out/bin/hello-fat32-multi"
     cp hello-cms "$out/bin/hello-cms"
+    cp hello-postlink-modify "$out/bin/hello-postlink-modify"
     cp libgreet-fat64.dylib "$out/lib/libgreet-fat64.dylib"
     ln -s hello "$out/bin/hello-symlink"
     echo "hello docs" > "$doc/share/doc/hello"

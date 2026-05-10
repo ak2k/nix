@@ -59,6 +59,18 @@ output=$("$target/bin/hello-self")
 echo "$output" | grepQuiet -E "^self=$NIX_STORE_DIR/[a-z0-9]{32}-macho-rewrite-multi/bin/hello-self$"
 /usr/bin/codesign --verify "$target/bin/hello-self"
 
+# Post-link byte-modification variant: the build flips one byte in
+# `__TEXT,__cstring` after `ld -adhoc_codesign`, leaving a stale page
+# hash on the page covering the marker. Mirrors cctools-port
+# `install_name_tool`, `makeBinaryWrapper`, and SEA-packager
+# byte-modification, none of which re-sign. Asserted against `$out`
+# (the cold IA build): `outputRewrites` is empty, so this fixture
+# passes only when the fix-up runs unconditionally.
+[[ -x "$out/bin/hello-postlink-modify" ]]
+"$out/bin/hello-postlink-modify" | grepQuiet -F 'NACHO_REWRITE_POSTLINK_MARKER_PFRMTKQNVH'
+/usr/bin/codesign --verify "$out/bin/hello-postlink-modify"
+/usr/bin/codesign -dvvv "$out/bin/hello-postlink-modify" 2>&1 | grepQuiet -F 'flags=0x20002(adhoc,linker-signed)'
+
 # CMS-skip variant: the SuperBlob carries a synthetic non-empty
 # `CSMAGIC_BLOBWRAPPER` under `CSSLOT_SIGNATURESLOT`. The helper's
 # pre-scan must detect it and leave the slice untouched — recomputing

@@ -1650,19 +1650,21 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
                 restorePath(tmpPath, *source);
                 deletePath(actualPath);
                 movePath(tmpPath, actualPath);
+            }
 
 #ifdef __APPLE__
-                /* nixpkgs#507531 / NixOS/nix#6065: `RewritingSink` above
-                   mutates bytes inside `__TEXT,__cstring` pages that the
-                   linker had already covered with ad-hoc page hashes
-                   (`linker-signed` in `LC_CODE_SIGNATURE`), so the
-                   resulting binary SIGKILLs at first page-in. Recompute
-                   the affected slots in place; preserves every other
-                   byte and is therefore bit-reproducible. */
-                if (size_t fixed = fixupMachoPageHashes(actualPath); fixed > 0)
-                    debug("fixupMachoPageHashes: rewrote %1% Mach-O file(s) under %2%", fixed, PathFmt(actualPath));
+            /* nixpkgs#507531 / NixOS/nix#6065. Several pre-registerOutputs
+               steps (RewritingSink above; build-time `install_name_tool`,
+               wrappers, SEA packagers) can modify bytes covered by
+               `linker-signed` page hashes, leaving the binary in a
+               `cs_invalid_page` SIGKILL state. The fix-up is content-driven
+               and length-preserving; running it on every output is safe
+               and idempotent. */
+            if (size_t fixed = fixupMachoPageHashes(actualPath); fixed > 0)
+                debug("fixupMachoPageHashes: rewrote %1% Mach-O file(s) under %2%", fixed, PathFmt(actualPath));
 #endif
 
+            if (!rewrites.empty()) {
                 /* FIXME: set proper permissions in restorePath() so
                    we don't have to do another traversal. */
                 canonicalisePathMetaData(
