@@ -42,8 +42,8 @@ namespace nix {
 namespace {
 
 /* Smallest file that could be a thin Mach-O (sizeof(mach_header)).
-   The upper bound `maxMachOFileSize` is shared with the daemon-side
-   scan via the header. */
+   The upper bounds (`maxMachOFileSize()`, `maxMachOInMemorySize()`)
+   are shared with the daemon-side scan via the header. */
 constexpr size_t minFileSize = 28;
 
 /**
@@ -73,17 +73,33 @@ size_t fixupFile(const std::filesystem::path & path, bool checkOnly)
     if (!hasMachOMagic(reinterpret_cast<const unsigned char *>(peek.data())))
         return 0;
 
-    /* The size gate applies only to Mach-O files (checked after the
+    /* The size gates apply only to Mach-O files (checked after the
        magic peek, so an ordinary large file — libtorch weights, a
-       dataset — is ignored, not treated as an error). A Mach-O this
-       large is left as-is with a warning rather than a throw, which
-       would abort a whole-path run over its other files. In check
-       mode it counts as a failure: the file may carry a signature
-       nothing has looked at, and exit 0 promises all signatures are
-       valid — the same fail-closed reading the daemon-side scan
-       gives such files (`Unchecked`). */
-    if (sz > maxMachOFileSize) {
-        warn("%s is too large to inspect (limit %d MiB); skipping", PathFmt(path), 512);
+       dataset — is ignored, not treated as an error). A Mach-O too
+       large for its signature format is left as-is with a warning
+       rather than a throw, which would abort a whole-path run over
+       its other files. In check mode it counts as a failure: the
+       file may carry a signature nothing has looked at, and exit 0
+       promises all signatures are valid — the same fail-closed
+       reading the daemon-side scan gives such files (`Unchecked`). */
+    if (sz > maxMachOFileSize()) {
+        warn("%s is too large for its signature to be verified; skipping", PathFmt(path));
+        return checkOnly ? 1 : 0;
+    }
+
+    if (checkOnly) {
+        /* Verification is read-only: map the file instead of loading
+           it, so checking costs no memory at any size. The type
+           makes writing through the mapping impossible. */
+        if (auto mapped = tryMapFile(path))
+            return checkMachOSignature(mapped->view(), path) ? 1 : 0;
+    }
+
+    /* Repair rewrites the buffer and writes it back whole, so it
+       (and the check fallback when mapping fails) is bounded by
+       what may be loaded into memory. */
+    if (sz > maxMachOInMemorySize()) {
+        warn("%s is too large to load into memory; skipping", PathFmt(path));
         return checkOnly ? 1 : 0;
     }
 

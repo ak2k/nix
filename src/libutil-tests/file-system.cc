@@ -351,7 +351,7 @@ TEST(createTempDir, works)
  * exchangePaths
  * --------------------------------------------------------------------------*/
 
-TEST(exchangePaths, swapsDirectoriesAtomicallyOrReportsUnsupported)
+TEST(exchangePaths, swapsOrReportsUnsupported)
 {
     auto tmpDir = std::filesystem::path(createTempDir());
     nix::AutoDelete delTmpDir(tmpDir, /*recursive=*/true);
@@ -372,7 +372,25 @@ TEST(exchangePaths, swapsDirectoriesAtomicallyOrReportsUnsupported)
     EXPECT_EQ(readFile(b / "f"), "contents-a");
 }
 
-TEST(exchangePaths, throwsWhenAPathIsMissing)
+TEST(tryMapFile, mapsFileRefusesEmpty)
+{
+    auto tmpDir = std::filesystem::path(createTempDir());
+    nix::AutoDelete delTmpDir(tmpDir, /*recursive=*/true);
+
+    writeFile(tmpDir / "f", "hello mapping");
+    auto mapped = tryMapFile(tmpDir / "f");
+    ASSERT_TRUE(mapped.has_value());
+    EXPECT_EQ(mapped->view(), "hello mapping");
+
+    /* Empty files cannot be mapped; the caller falls back. */
+    writeFile(tmpDir / "empty", "");
+    EXPECT_FALSE(tryMapFile(tmpDir / "empty").has_value());
+
+    /* Missing files report unmappable rather than throwing. */
+    EXPECT_FALSE(tryMapFile(tmpDir / "missing").has_value());
+}
+
+TEST(exchangePaths, throwsOnMissingPath)
 {
     auto tmpDir = std::filesystem::path(createTempDir());
     nix::AutoDelete delTmpDir(tmpDir, /*recursive=*/true);

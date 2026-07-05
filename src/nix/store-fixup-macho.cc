@@ -89,7 +89,7 @@ void CmdStoreFixupMachO::run(ref<Store> store, StorePaths && storePaths)
                     PathFmt(hit.path),
                     hit.kind == MachOSignatureKind::Cms
                         ? "carries a CMS signature (Developer ID), which only the original signing identity can regenerate"
-                        : "is too large to inspect");
+                        : "is too large for its code signature to be verified");
                 return;
             }
 

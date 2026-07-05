@@ -235,16 +235,10 @@ void readFile(const std::filesystem::path & path, Sink & sink, bool memory_map)
 {
     // Memory-map the file for faster processing where possible.
     if (memory_map) {
-        try {
-            /* mapped_file_source can't be constructed from a std::filesystem::path. */
-            boost::iostreams::mapped_file_source mmap(boost::filesystem::path(path.native()));
-            if (mmap.is_open()) {
-                sink({mmap.data(), mmap.size()});
-                return;
-            }
-        } catch (const boost::exception & e) {
+        if (auto mapped = tryMapFile(path)) {
+            sink(mapped->view());
+            return;
         }
-        debug("memory-mapping failed for path: %s", PathFmt(path));
     }
 
     // Stream the file instead if memory-mapping fails or is disabled.
@@ -646,6 +640,39 @@ void moveFile(const std::filesystem::path & oldName, const std::filesystem::path
                 os_string_to_string(PathView{tempCopyTarget}), os_string_to_string(PathView{newPath}));
         }
     }
+}
+
+struct MappedFileSource::Impl
+{
+    boost::iostreams::mapped_file_source source;
+};
+
+MappedFileSource::MappedFileSource(std::unique_ptr<Impl> impl, std::string_view view)
+    : impl(std::move(impl))
+    , view_(view)
+{
+}
+
+MappedFileSource::MappedFileSource(MappedFileSource &&) noexcept = default;
+
+MappedFileSource::~MappedFileSource() = default;
+
+std::optional<MappedFileSource> tryMapFile(const std::filesystem::path & path)
+{
+    try {
+        auto impl = std::make_unique<MappedFileSource::Impl>();
+        /* mapped_file_source can't be constructed from a std::filesystem::path. */
+        impl->source.open(boost::filesystem::path(path.native()));
+        if (impl->source.is_open()) {
+            std::string_view view{impl->source.data(), impl->source.size()};
+            return MappedFileSource(std::move(impl), view);
+        }
+    } catch (const std::exception & e) {
+        /* boost's mapped_file failure is std::ios_base::failure, not
+           always mixed with boost::exception. */
+    }
+    debug("memory-mapping failed for %s", PathFmt(path));
+    return std::nullopt;
 }
 
 bool exchangePaths(const std::filesystem::path & a, const std::filesystem::path & b)

@@ -1089,7 +1089,7 @@ static void verifyMachOSignatures(
         return;
     }
 
-    /* A Mach-O file too large to parse is reported `Unchecked` by the
+    /* A Mach-O file too large to verify is reported `Unchecked` by the
        scan, and the check child skips it — its exit status says
        nothing about such a file. Treat the path as unverifiable
        rather than valid: refuse under `refuse`, warn otherwise. */

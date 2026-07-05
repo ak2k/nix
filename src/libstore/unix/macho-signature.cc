@@ -2,13 +2,16 @@
 
 #include "nix/store/references.hh"
 #include "nix/util/base-nix-32.hh"
+#include "nix/util/environment-variables.hh"
 #include "nix/util/file-descriptor.hh"
 #include "nix/util/file-system.hh"
 #include "nix/util/fmt.hh"
 #include "nix/util/hash.hh"
 #include "nix/util/logging.hh"
+#include "nix/util/util.hh"
 
 #include <array>
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 
@@ -214,13 +217,21 @@ bool validSliceBounds(size_t sliceOff, size_t sliceSize, size_t archArrayEnd, si
 
 /**
  * Recompute stale page-hash slots of one Mach-O slice in place — or,
- * with `checkOnly`, just report whether any slot is stale. Returns
+ * in check mode, just report whether any slot is stale. Returns
  * true iff at least one slot was (or would be) rewritten. Throws on
  * repairing (not checking) a slice with a non-empty CMS signature.
+ *
+ * Templated over the buffer type so that check mode can run against
+ * read-only bytes (a memory-mapped file): with a `string_view` the
+ * write branch does not compile at all, rather than being guarded by
+ * a runtime flag.
  */
-bool fixupSlice(std::string & data, size_t sliceBase, const std::filesystem::path & path, bool checkOnly)
+template<typename Buffer>
+bool fixupSlice(Buffer & data, size_t sliceBase, const std::filesystem::path & path, bool checkOnly)
 {
-    auto * bytes = reinterpret_cast<uint8_t *>(data.data());
+    constexpr bool canWrite = !std::is_const_v<std::remove_reference_t<decltype(*data.data())>>;
+    assert(canWrite || checkOnly);
+    const auto * bytes = reinterpret_cast<const uint8_t *>(data.data());
 
     if (sliceBase + machHeaderSize32 > data.size())
         return false;
@@ -426,10 +437,12 @@ bool fixupSlice(std::string & data, size_t sliceBase, const std::filesystem::pat
             }
             std::string_view sv(data.data() + pageStart, pageEnd - pageStart);
             Hash h = hashString(hashAlgo, sv);
-            uint8_t * slot = bytes + slotsAbs + size_t(i) * hashSize;
+            const uint8_t * slot = bytes + slotsAbs + size_t(i) * hashSize;
             if (std::memcmp(slot, h.hash, hashSize) != 0) {
-                if (!checkOnly)
-                    std::memcpy(slot, h.hash, hashSize);
+                if constexpr (canWrite) {
+                    if (!checkOnly)
+                        std::memcpy(data.data() + slotsAbs + size_t(i) * hashSize, h.hash, hashSize);
+                }
                 modified = true;
             }
         }
@@ -443,7 +456,32 @@ bool fixupSlice(std::string & data, size_t sliceBase, const std::filesystem::pat
     return modified || (checkOnly && unverifiable);
 }
 
+static size_t sizeBoundFromEnv(const char * envVar, size_t dflt)
+{
+    if (auto v = getEnv(envVar))
+        if (auto n = string2Int<size_t>(*v))
+            return *n;
+    return dflt;
+}
+
 } // namespace
+
+size_t maxMachOFileSize()
+{
+    /* codeLimit is 32 bits (the codeLimit64 variant is unsupported),
+       so 4 GiB is where verification becomes impossible, not merely
+       expensive. Capped to half the address space on 32-bit hosts,
+       where the mapping itself is the constraint. */
+    constexpr size_t formatBound = sizeof(size_t) >= 8 ? (size_t(4) << 30) : (size_t(2) << 30);
+    static size_t bound = sizeBoundFromEnv("_NIX_TEST_MACHO_MAX_FILE_SIZE", formatBound);
+    return bound;
+}
+
+size_t maxMachOInMemorySize()
+{
+    static size_t bound = sizeBoundFromEnv("_NIX_TEST_MACHO_MAX_IN_MEMORY_SIZE", 512 * 1024 * 1024);
+    return bound;
+}
 
 MachOSignatureKind detectMachOSignature(std::string_view contents)
 {
@@ -525,14 +563,14 @@ static std::vector<MachOSignatureRewriteHit> scanImpl(const std::filesystem::pat
         if (magicLE != machMagic32 && magicLE != machMagic64 && magicBE != fatMagic32 && magicBE != fatMagic64)
             return;
 
-        /* A Mach-O file too large to inspect could still carry a
-           signature — report it as a hit rather than silently
-           letting it through. But when we know which hashes the
-           rewrite would substitute, stream-scan for them first, so
-           an oversized binary that doesn't contain any of them (and
-           is therefore untouched by the rewrite) doesn't cause a
-           spurious refusal. */
-        if (sz > maxMachOFileSize) {
+        /* A Mach-O file too large for its signature to be verified
+           could still carry one — report it as a hit rather than
+           silently letting it through. But when we know which hashes
+           the rewrite would substitute, stream-scan for them first,
+           so an oversized binary that doesn't contain any of them
+           (and is therefore untouched by the rewrite) doesn't cause
+           a spurious refusal. */
+        if (sz > maxMachOFileSize()) {
             if (hashParts) {
                 RefScanSink refScan{StringSet{*hashParts}};
                 drainFD(fd.get(), refScan);
@@ -543,13 +581,33 @@ static std::vector<MachOSignatureRewriteHit> scanImpl(const std::filesystem::pat
             return;
         }
 
-        auto contents = readFile(fd.get());
-        auto kind = detectMachOSignature(contents);
-        if (kind == MachOSignatureKind::None)
+        /* Detection reads a few KiB at scattered offsets, so map the
+           file rather than loading it: the pages stay clean and
+           evictable, and a large binary costs no memory. Fall back
+           to a bounded heap read where mapping fails. */
+        auto inspect = [&](std::string_view contents) {
+            auto kind = detectMachOSignature(contents);
+            if (kind == MachOSignatureKind::None)
+                return;
+            if (hashParts && !containsAnyHash(contents, *hashParts))
+                return;
+            hits.push_back({path, kind});
+        };
+        if (auto mapped = tryMapFile(path)) {
+            inspect(mapped->view());
             return;
-        if (hashParts && !containsAnyHash(contents, *hashParts))
+        }
+        if (sz > maxMachOInMemorySize()) {
+            if (hashParts) {
+                RefScanSink refScan{StringSet{*hashParts}};
+                drainFD(fd.get(), refScan);
+                if (refScan.getResult().empty())
+                    return;
+            }
+            hits.push_back({path, MachOSignatureKind::Unchecked});
             return;
-        hits.push_back({path, kind});
+        }
+        inspect(readFile(fd.get()));
     };
 
     std::error_code ec;
@@ -597,7 +655,8 @@ std::vector<MachOSignatureRewriteHit> scanForMachOSignatures(const std::filesyst
     return scanImpl(root, nullptr);
 }
 
-bool fixupMachOSignature(std::string & contents, const std::filesystem::path & path, bool checkOnly)
+template<typename Buffer>
+static bool fixupMachO(Buffer & contents, const std::filesystem::path & path, bool checkOnly)
 {
     if (contents.size() < machHeaderSize32)
         return false;
@@ -643,6 +702,16 @@ bool fixupMachOSignature(std::string & contents, const std::filesystem::path & p
     }
 
     return modified;
+}
+
+bool fixupMachOSignature(std::string & contents, const std::filesystem::path & path, bool checkOnly)
+{
+    return fixupMachO(contents, path, checkOnly);
+}
+
+bool checkMachOSignature(std::string_view contents, const std::filesystem::path & path)
+{
+    return fixupMachO(contents, path, true);
 }
 
 MachOCheckOutcome classifyMachOCheck(int waitStatus)

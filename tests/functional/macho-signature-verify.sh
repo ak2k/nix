@@ -167,11 +167,15 @@ grepQuietInverse "repaired invalid Mach-O code signature" "$TEST_ROOT/partial-re
 nix store verify --no-trust "$partialOut"
 nix path-info --json --json-format 2 "$partialOut" | jq -e '.info.[].signatures // [] | length == 0' >/dev/null
 
-# A Mach-O file too large to parse cannot be verified: the check
-# child skips it, so its exit status says nothing about the file.
-# Under `refuse` the path must be refused as unverifiable — trusting
-# the child's exit 0 here would accept a possibly-broken binary the
-# check never looked at. (Sparse file: only the magic is real.)
+# A Mach-O file too large for its signature to be verified (the
+# format bound is 4 GiB; shrunk here so the fixture stays small).
+# Under `refuse` the path must be refused as unverifiable — nothing
+# can have looked at such a file's signature. (Sparse file: only the
+# magic is real.)
+export _NIX_TEST_MACHO_MAX_FILE_SIZE=$((1024 * 1024))
+# The daemon caches the bound at startup, so a pre-started daemon
+# must be restarted to see the override.
+[[ -z "${NIX_DAEMON_PACKAGE:-}" ]] || restartDaemon
 clearStore
 bigDrv=$(nix-instantiate ./macho-signature-oversized.nix)
 nix-store --realise "$bigDrv"
@@ -194,3 +198,4 @@ nix-store --realise "$bigOut" \
 # The tool's own --check contract agrees: an uninspectable Mach-O is
 # a check failure, not a pass.
 expect 2 nix __fixup-macho --check "$bigOut"
+unset _NIX_TEST_MACHO_MAX_FILE_SIZE

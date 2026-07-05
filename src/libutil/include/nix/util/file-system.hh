@@ -25,7 +25,9 @@
 #endif
 
 #include <functional>
+#include <memory>
 #include <optional>
+#include <string_view>
 
 /**
  * Polyfill for MinGW
@@ -335,6 +337,37 @@ void replaceSymlink(const std::filesystem::path & target, const std::filesystem:
  * the scenes
  */
 void moveFile(const std::filesystem::path & src, const std::filesystem::path & dst);
+
+/**
+ * A read-only memory mapping of a file, viewable as a
+ * `std::string_view`. The mapping is released on destruction.
+ */
+class MappedFileSource
+{
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+    std::string_view view_;
+
+    MappedFileSource(std::unique_ptr<Impl> impl, std::string_view view);
+
+    friend std::optional<MappedFileSource> tryMapFile(const std::filesystem::path & path);
+
+public:
+    MappedFileSource(MappedFileSource &&) noexcept;
+    ~MappedFileSource();
+
+    std::string_view view() const
+    {
+        return view_;
+    }
+};
+
+/**
+ * Memory-map `path` read-only, or return `std::nullopt` when the
+ * file cannot be mapped (an empty file, a filesystem without mmap
+ * support), so the caller can fall back to reading it. Never throws.
+ */
+std::optional<MappedFileSource> tryMapFile(const std::filesystem::path & path);
 
 /**
  * Atomically exchange the directory entries `a` and `b` (both must

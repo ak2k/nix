@@ -1101,7 +1101,8 @@ void DerivationBuilderImpl::checkRewritesDontBreakMachOSignatures(
        fails the build here. Not repairable: CMS signatures (the
        page hashes could be recomputed, but the signer's certificate
        chain commits to them — only the original identity can
-       re-sign), files too large to have been parsed, and the
+       re-sign), files too large to have their signatures verified,
+       and the
        self-reference rewrite of a content-addressed output (the
        hashed pages contain the output's own path, which is itself a
        function of those pages — no consistent value exists; see
@@ -1133,7 +1134,7 @@ void DerivationBuilderImpl::throwMachOSignatureRefusal(
     for (auto & hit : hits) {
         std::string_view annotation = hit.kind == MachOSignatureKind::Cms ? "  (CMS-signed)"
                                       : hit.kind == MachOSignatureKind::Unchecked
-                                          ? "  (too large to inspect; assumed signed)"
+                                          ? "  (too large to verify; assumed signed)"
                                           : "";
         files += fmt("\n  %s%s", PathFmt(hit.path), annotation);
         anyCms = anyCms || hit.kind == MachOSignatureKind::Cms;
@@ -1173,9 +1174,8 @@ void DerivationBuilderImpl::throwMachOSignatureRefusal(
         remediation += "\nFiles marked CMS-signed cannot be re-signed without the original signing identity.";
     if (anyUnchecked)
         remediation +=
-            fmt("\nFiles larger than %d MiB are not parsed; if such a file is certainly unsigned, "
-                "set `macho-signature-rewrite-check = warn` to proceed.",
-                512);
+            "\nFiles marked too-large exceed what the signature format (or this host) can verify; "
+            "if such a file is certainly unsigned, set `macho-signature-rewrite-check = warn` to proceed.";
 
     /* Delete the rejected output before failing. A floating CA
        output sits at a fallback scratch path that — unlike a known

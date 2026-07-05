@@ -31,30 +31,52 @@ constexpr uint32_t machMagic64 = 0xfeedfacf; // MH_MAGIC_64
 constexpr uint32_t fatMagic32 = 0xcafebabe;  // FAT_MAGIC (big-endian on disk)
 constexpr uint32_t fatMagic64 = 0xcafebabf;  // FAT_MAGIC_64
 
-/* Largest file the parser will read into memory. No darwin build
-   output carries a Mach-O binary this big in practice; a larger
-   file is reported unparsed rather than inspected. Shared by the
-   daemon-side scan and the `nix __fixup-macho` tool so the two
-   agree. */
-constexpr size_t maxMachOFileSize = 512 * 1024 * 1024;
+/**
+ * Largest Mach-O file whose signature can be verified. 4 GiB is the
+ * bound of the format itself as implemented here: the CodeDirectory
+ * `codeLimit` field is 32 bits, so a signature over more than 4 GiB
+ * needs the `codeLimit64` variant, which this parser does not
+ * support — such a file is genuinely unverifiable and reported
+ * `Unchecked` (fail closed). On 32-bit hosts the bound is the
+ * address space instead, since verification maps the file.
+ *
+ * Overridable with `_NIX_TEST_MACHO_MAX_FILE_SIZE` so tests can
+ * exercise the oversized paths without gigabyte fixtures. Shared by
+ * the daemon-side scan and the `nix __fixup-macho` tool so the two
+ * agree.
+ */
+size_t maxMachOFileSize();
+
+/**
+ * Largest Mach-O file that will be loaded into memory whole: the
+ * repair (which rewrites the buffer) and the fallback read when the
+ * file cannot be memory-mapped. Deliberately smaller than
+ * `maxMachOFileSize`: checking is cheap at any size via mmap, while
+ * an unbounded heap read is not — a stale file above this bound
+ * fails closed on the check that follows every repair.
+ *
+ * Overridable with `_NIX_TEST_MACHO_MAX_IN_MEMORY_SIZE`.
+ */
+size_t maxMachOInMemorySize();
 
 /**
  * Kind of code signature a Mach-O file carries.
  */
 enum struct MachOSignatureKind {
-    /* No `LC_CODE_SIGNATURE` load command in any slice. */
+    /// No `LC_CODE_SIGNATURE` load command in any slice.
     None,
-    /* A signature without an embedded CMS blob: `ld`'s linker-signed
-       ad-hoc signature, or `codesign --sign -`. Deterministically
-       regenerable from the file contents alone. */
+    /// A signature without an embedded CMS blob: `ld`'s linker-signed
+    /// ad-hoc signature, or `codesign --sign -`. Deterministically
+    /// regenerable from the file contents alone.
     AdHoc,
-    /* A signature carrying a non-empty CMS (PKCS#7) blob — signed
-       with a certificate (Developer ID, App Store). Cannot be
-       regenerated without the original signing identity. */
+    /// A signature carrying a non-empty CMS (PKCS#7) blob — signed
+    /// with a certificate (Developer ID, App Store). Cannot be
+    /// regenerated without the original signing identity.
     Cms,
-    /* Mach-O magic, but the file could not be inspected (too large).
-       Only produced by `scanForMachOSignatureRewrites`, which treats
-       such files as potentially signed — fail closed. */
+    /// Mach-O magic, but the file could not be inspected: larger
+    /// than the signature format can cover, or unmappable and larger
+    /// than may be loaded into memory. The scans treat such files as
+    /// potentially signed — fail closed.
     Unchecked,
 };
 
@@ -144,5 +166,13 @@ std::vector<MachOSignatureRewriteHit> scanForMachOSignatures(const std::filesyst
  * `path` is used in diagnostics only.
  */
 bool fixupMachOSignature(std::string & contents, const std::filesystem::path & path, bool checkOnly);
+
+/**
+ * The check mode of `fixupMachOSignature` over read-only bytes (a
+ * memory-mapped file): returns true iff any signature is stale or
+ * cannot be verified. Never writes — enforced by the type, not by a
+ * runtime flag, so a read-only mapping is safe to pass.
+ */
+bool checkMachOSignature(std::string_view contents, const std::filesystem::path & path);
 
 } // namespace nix

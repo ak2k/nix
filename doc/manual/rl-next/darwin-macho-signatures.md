@@ -26,7 +26,7 @@ enter the store, controlled by three settings:
 - `macho-signature-verify` (`ignore` by default) checks paths obtained from
   a substituter — where binaries broken elsewhere actually reach users — and
   can `warn`, `refuse`, or `repair` them. A signature that cannot be
-  verified (a file too large to parse, an unsupported hash type) is treated
+  verified (a file larger than the signature format covers, an unsupported hash type) is treated
   as invalid rather than waved through.
 
 - `nix store fixup-macho` repairs broken signatures in paths already in the

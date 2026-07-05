@@ -631,8 +631,9 @@ public:
 
           - `refuse`: fail the substitution. Nix falls back to
             building the path locally if possible. A signature that
-            cannot be verified — a file too large to parse, or a
-            CodeDirectory whose hash type Nix does not support — is
+            cannot be verified — a file larger than the signature
+            format covers, or a CodeDirectory whose hash type Nix
+            does not support — is
             treated the same as an invalid one (fail closed).
 
           - `repair`: recompute the stale page hashes before the path
