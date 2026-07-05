@@ -337,6 +337,16 @@ void replaceSymlink(const std::filesystem::path & target, const std::filesystem:
 void moveFile(const std::filesystem::path & src, const std::filesystem::path & dst);
 
 /**
+ * Atomically exchange the directory entries `a` and `b` (both must
+ * exist, on the same filesystem): `renameat2(RENAME_EXCHANGE)` on
+ * Linux, `renamex_np(RENAME_SWAP)` on darwin. Returns false when the
+ * platform or the underlying filesystem does not support an atomic
+ * exchange, so the caller can fall back to a non-atomic sequence;
+ * throws on any other failure.
+ */
+bool exchangePaths(const std::filesystem::path & a, const std::filesystem::path & b);
+
+/**
  * Recursively copy the content of `oldPath` to `newPath`. If `andDelete` is
  * `true`, then also remove `oldPath` (making this equivalent to `moveFile`, but
  * with the guaranty that the destination will be “fresh”, with no stale inode

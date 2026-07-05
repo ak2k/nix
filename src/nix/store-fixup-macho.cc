@@ -127,8 +127,14 @@ void CmdStoreFixupMachO::run(ref<Store> store, StorePaths && storePaths)
         /* Never repair in place: `auto-optimise-store` hard-links
            identical files across store paths, so an in-place write
            would corrupt every sharing path. Copy the whole path,
-           repair the copy, swap it in, and update the database. */
-        auto tempDir = createTempDir();
+           repair the copy, swap it in, and update the database.
+
+           The copy must live on the store's own filesystem: the swap
+           is a `rename`, which cannot cross filesystems, and the
+           store is routinely one of its own (a separate APFS volume
+           on darwin, while the default temporary directory sits on
+           the root volume or on tmpfs). */
+        auto [tempDir, tempDirFd] = localStore.createTempDirInStore();
         AutoDelete delTempDir(tempDir);
         auto tempPath = std::filesystem::path(tempDir) / "x";
 

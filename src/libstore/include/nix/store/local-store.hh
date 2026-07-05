@@ -303,8 +303,11 @@ public:
      * modify a path's files in place because `auto-optimise-store`
      * may hard-link them into other paths.
      *
-     * The swap window (old path moved away, new one moved in) is the
-     * same as `repairPath`'s.
+     * `source` must be on the store's filesystem (the swap renames;
+     * use `createTempDirInStore`). On filesystems with an atomic
+     * exchange the path exists, whole, at every instant; elsewhere
+     * the swap falls back to a pair of renames with the same window
+     * as `repairPath`.
      */
     void replaceStorePath(const StorePath & path, const std::filesystem::path & source, const ValidPathInfo & info);
 
@@ -442,6 +445,14 @@ public:
 
     void vacuumDB();
 
+    /**
+     * Create a locked temporary directory inside the store, for
+     * content that must end up on the store's own filesystem (a
+     * rename into the store cannot cross filesystems). The lock
+     * keeps the garbage collector from deleting it.
+     */
+    std::pair<std::filesystem::path, AutoCloseFD> createTempDirInStore();
+
     void addSignatures(const StorePath & storePath, const std::set<Signature> & sigs) override;
 
     /**
@@ -516,8 +527,6 @@ private:
 
     void findRuntimeRoots(Roots & roots, bool censor);
 
-    std::pair<std::filesystem::path, AutoCloseFD> createTempDirInStore();
-
     typedef boost::unordered_flat_set<ino_t> InodeHash;
 
     InodeHash loadInodeHash();
@@ -537,8 +546,6 @@ private:
 
     friend struct PathSubstitutionGoal;
     friend struct DerivationGoal;
-    /* Only used for createTempDirInStore. */
-    friend class DerivationBuilderImpl;
 };
 
 } // namespace nix

@@ -347,4 +347,39 @@ TEST(createTempDir, works)
     ASSERT_TRUE(std::filesystem::is_directory(tmpDir));
 }
 
+/* ----------------------------------------------------------------------------
+ * exchangePaths
+ * --------------------------------------------------------------------------*/
+
+TEST(exchangePaths, swapsDirectoriesAtomicallyOrReportsUnsupported)
+{
+    auto tmpDir = std::filesystem::path(createTempDir());
+    nix::AutoDelete delTmpDir(tmpDir, /*recursive=*/true);
+
+    auto a = tmpDir / "a";
+    auto b = tmpDir / "b";
+    std::filesystem::create_directory(a);
+    std::filesystem::create_directory(b);
+    writeFile(a / "f", "contents-a");
+    writeFile(b / "f", "contents-b");
+
+    /* False is a valid outcome (filesystem without exchange support);
+       the swap semantics only apply when it reports success. */
+    if (!exchangePaths(a, b))
+        return;
+
+    EXPECT_EQ(readFile(a / "f"), "contents-b");
+    EXPECT_EQ(readFile(b / "f"), "contents-a");
+}
+
+TEST(exchangePaths, throwsWhenAPathIsMissing)
+{
+    auto tmpDir = std::filesystem::path(createTempDir());
+    nix::AutoDelete delTmpDir(tmpDir, /*recursive=*/true);
+
+    auto a = tmpDir / "a";
+    std::filesystem::create_directory(a);
+    EXPECT_THROW(exchangePaths(a, tmpDir / "missing"), SysError);
+}
+
 } // namespace nix

@@ -648,6 +648,29 @@ void moveFile(const std::filesystem::path & oldName, const std::filesystem::path
     }
 }
 
+bool exchangePaths(const std::filesystem::path & a, const std::filesystem::path & b)
+{
+#if defined(__linux__)
+    if (renameat2(AT_FDCWD, a.c_str(), AT_FDCWD, b.c_str(), RENAME_EXCHANGE) == 0)
+        return true;
+    /* EINVAL: filesystem doesn't support RENAME_EXCHANGE; ENOSYS:
+       pre-3.15 kernel. Both mean "fall back", not "fail". */
+    if (errno == EINVAL || errno == ENOSYS)
+        return false;
+    throw SysError("exchanging %s and %s", PathFmt(a), PathFmt(b));
+#elif defined(__APPLE__)
+    if (renamex_np(a.c_str(), b.c_str(), RENAME_SWAP) == 0)
+        return true;
+    if (errno == ENOTSUP || errno == EINVAL)
+        return false;
+    throw SysError("exchanging %s and %s", PathFmt(a), PathFmt(b));
+#else
+    (void) a;
+    (void) b;
+    return false;
+#endif
+}
+
 //////////////////////////////////////////////////////////////////////
 
 bool isExecutableFileAmbient(const std::filesystem::path & exe)

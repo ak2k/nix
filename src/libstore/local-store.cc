@@ -1244,11 +1244,10 @@ void LocalStore::replaceStorePath(
     canonicalisePathMetaData(source, {NIX_WHEN_SUPPORT_ACLS(config->getLocalSettings().ignoredAcls)});
 
     {
-        /* Swap the repaired contents in, the same rename window
-           `repairPath` uses. Plain `rename`, not `moveFile`: the
-           latter swallows non-EXDEV errors, and a silent failure here
-           would leave the path unrepaired while the database records
-           the repaired hash. */
+        /* Swap the repaired contents in. Plain renames, not
+           `moveFile`: the latter swallows non-EXDEV errors, and a
+           silent failure here would leave the path unrepaired while
+           the database records the repaired hash. */
         auto oldPath =
             std::filesystem::path(realPath).replace_filename(std::filesystem::path(realPath).filename() += ".old");
         deletePath(oldPath);
@@ -1263,14 +1262,25 @@ void LocalStore::replaceStorePath(
         };
         addOwnerWrite(realPath);
         addOwnerWrite(source);
-        std::filesystem::rename(realPath, oldPath);
-        try {
-            std::filesystem::rename(source, realPath);
-        } catch (...) {
-            std::filesystem::rename(oldPath, realPath);
-            throw;
+
+        /* Prefer an atomic exchange of the two directory entries:
+           the store path then exists, whole, at every instant, and
+           the displaced contents land at `source` for the ordinary
+           cleanup below. The fallback pair of renames has a window
+           where the path is missing; a crash inside it loses the
+           path (recovered by `nix store verify --repair`). */
+        if (exchangePaths(source, realPath)) {
+            deletePath(source);
+        } else {
+            std::filesystem::rename(realPath, oldPath);
+            try {
+                std::filesystem::rename(source, realPath);
+            } catch (...) {
+                std::filesystem::rename(oldPath, realPath);
+                throw;
+            }
+            deletePath(oldPath);
         }
-        deletePath(oldPath);
         canonicaliseTimestampAndPermissions(realPath);
     }
 

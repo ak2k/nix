@@ -50,14 +50,16 @@ substitution-time checks make.
 
 > **Warning**
 >
-> As with `nix store repair`, there is a small window during which
-> the old path is moved out of the way and replaced. If the command
-> is interrupted in that window, the path may be left missing, or —
-> if interrupted after the swap but before the database update — left
-> with repaired contents whose recorded NAR hash no longer matches.
-> Both states are detected by `nix store verify` and recovered with
-> `nix store verify --repair`, which re-obtains the path from a
-> substituter or by rebuilding rather than trusting the on-disk
-> bytes.
+> On filesystems with an atomic exchange operation (APFS, ext4,
+> btrfs, xfs) the repaired contents replace the old ones in a single
+> step and the path exists, whole, at every instant. Elsewhere the
+> swap falls back to a pair of renames with a small window in which
+> the path is missing, as with `nix store repair`. In either case,
+> interrupting the command after the swap but before the database
+> update leaves repaired contents whose recorded NAR hash no longer
+> matches. All of these states are detected by `nix store verify`
+> and recovered with `nix store verify --repair`, which re-obtains
+> the path from a substituter or by rebuilding rather than trusting
+> the on-disk bytes.
 
 )""
